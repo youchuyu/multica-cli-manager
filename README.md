@@ -1,27 +1,34 @@
 # multica-cli-manager
 
-通过 `npx` 创建一个空白的 Multica workspace 版本化管理项目，再用 pull/diff/push 同步远端 workspace。
+创建空白的 Multica workspace 版本化项目，并通过原生 `multica` CLI pull、diff、push 已存在的远端资源。
 
 ```sh
 npx multica-cli-manager my-multica-project
 cd my-multica-project
 npm install
-
 multica setup
+
 npm run workspace:pull -- --workspace <slug-or-id>
 npm run workspace:diff -- --workspace <slug-or-id>
+npm run workspace:push -- --workspace <slug-or-id>
 npm run workspace:push -- --workspace <slug-or-id> --apply
 ```
 
-新项目中的 `src/workspace/` 初始为空。首次 pull 会创建：
+首次 pull 会生成：
 
 ```text
-src/workspace/<workspace-slug>/
-├── workspace.yaml
-├── resources.json
-├── agents/*.md
-├── skills/*/SKILL.md
-└── projects/*/project.yaml
+src/workspaces/<workspace-slug>/
+├── workspace.json
+├── agents/<agent-slug>/
+│   ├── agent.json
+│   └── instructions.md
+├── skills/<skill-slug>/
+│   ├── skill.json
+│   ├── SKILL.md
+│   └── <附属文件>
+└── projects/<project-slug>/project.json
 ```
 
-`diff` 只读比较本地和远端。`push` 默认 dry-run；只有显式添加 `--apply` 才会更新由 `resources.json` 跟踪的 Agent、Skill 和 Project。本版本不删除远端资源，也不保存 Multica token；使用 `--profile <name>` 可选择命名 profile。
+JSON 字段直接映射 Multica CLI 的 `snake_case` 数据。v1 只维护核心字段；不会保存凭据、运行态、统计字段、Agent-Skill assignment 或 Project resources。
+
+`push` 默认只预览。只有显式添加 `--apply` 才会更新远端，并在更新后重新读取验证。本版本不创建、删除、归档或恢复资源，也不会删除远端 Skill 附属文件。认证信息由 Multica CLI profile 管理，可通过 `--profile <name>` 选择。

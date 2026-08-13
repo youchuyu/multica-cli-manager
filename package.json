@@ -7,6 +7,5 @@
   "files": ["bin", "src", "README.md"],
   "scripts": {
     "test": "node --test"
-  },
-  "dependencies": { "js-yaml": "^4.1.0" }
+  }
 }
