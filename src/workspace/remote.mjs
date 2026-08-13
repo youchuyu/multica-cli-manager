@@ -2,6 +2,18 @@ import { listItems, runMultica } from "../multica/client.mjs";
 import { slugify } from "./format.mjs";
 import { idOf } from "./shared.mjs";
 
+function validateRemoteProjectResources(projectId, resources) {
+  const seen = new Set();
+  for (const resource of resources) {
+    const id = idOf(resource, `remote Project ${projectId} resource`);
+    if (seen.has(id)) throw new Error(`duplicate remote project resource id: ${id}`);
+    seen.add(id);
+    if (resource.project_id && resource.project_id !== projectId)
+      throw new Error(`remote Project resource ${id} project_id does not match ${projectId}`);
+  }
+  return resources;
+}
+
 async function remoteSkill(id, cli) {
   const [skill, files] = await Promise.all([
     runMultica(["skill", "get", id], cli),
@@ -37,7 +49,14 @@ export async function remoteSnapshot(identifier, profile) {
   );
   const fullProjects = await Promise.all(
     listItems(projects).map((x) =>
-      runMultica(["project", "get", idOf(x, "remote Project")], cli),
+      (async () => {
+        const id = idOf(x, "remote Project");
+        const [project, resources] = await Promise.all([
+          runMultica(["project", "get", id], cli),
+          runMultica(["project", "resource", "list", id], cli),
+        ]);
+        return { ...project, resources: validateRemoteProjectResources(id, listItems(resources)) };
+      })(),
     ),
   );
   return {
@@ -91,6 +110,12 @@ export async function applyPush(syncPlan, local, remote) {
           if (["title", "description", "status"].includes(field))
             args.push(`--${field}`, String(item[field] ?? ""));
         await runMultica(args, cli);
+      }
+      if (op.resource_type === "project_resource") {
+        const r = op.resource;
+        if (op.action === "upsert") await runMultica(["project", "resource", "add", op.project_id, "--type", r.resource_type || "github_repo", "--ref", JSON.stringify(r.resource_ref), ...(r.label ? ["--label", r.label] : [])], cli);
+        if (op.action === "update") await runMultica(["project", "resource", "update", op.project_id, op.id, "--ref", JSON.stringify(r.resource_ref), ...(r.label ? ["--label", r.label] : ["--clear-label"])], cli);
+        if (op.action === "delete") await runMultica(["project", "resource", "remove", op.project_id, op.id], { ...cli, json: false });
       }
       if (op.resource_type === "skill_file" && op.action === "upsert") {
         const item = localById(local, "skill", op.skill_id);

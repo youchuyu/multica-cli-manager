@@ -3,7 +3,10 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { listItems } from "../multica/client.mjs";
 import {
   WORKSPACE_FIELDS,
+  PROJECT_RESOURCE_FIELDS,
   formattedJson,
+  normalizedProjectResource,
+  projectResourceKey,
   pick,
   safeRelativePath,
   slugify,
@@ -80,6 +83,27 @@ export async function localSnapshot(root, identifier, { required = true } = {}) 
           value.files[rel] = await readFile(filePath, "utf8");
         }
       }
+      if (type === "project") {
+        value.resources = await readJson(join(dir, "resources.json")).catch(() => []);
+        if (!Array.isArray(value.resources)) throw new Error(`${join(dir, "resources.json")} must be a JSON array`);
+        const resourceIds = new Set();
+        const newResourceKeys = new Set();
+        for (const resource of value.resources) {
+          for (const key of Object.keys(resource)) if (!PROJECT_RESOURCE_FIELDS.includes(key)) throw new Error(`${join(dir, "resources.json")} contains unsupported field: ${key}`);
+          if (!resource.resource_ref || typeof resource.resource_ref.url !== "string" || !resource.resource_ref.url.trim()) throw new Error(`${join(dir, "resources.json")} resource_ref.url must be a non-empty string`);
+          if (resource.id) {
+            const resourceId = idOf(resource, join(dir, "resources.json"));
+            if (resourceIds.has(resourceId)) throw new Error(`duplicate project resource id: ${resourceId}`);
+            resourceIds.add(resourceId);
+          } else {
+            const key = projectResourceKey(resource);
+            if (newResourceKeys.has(key)) throw new Error(`duplicate new project resource: ${key}`);
+            newResourceKeys.add(key);
+          }
+          Object.assign(resource, normalizedProjectResource(resource));
+        }
+      }
+      Object.defineProperty(value, "localDir", { value: dir });
       items[type].push(value);
     }
   for (const [type, values] of Object.entries(items)) {
@@ -91,6 +115,26 @@ export async function localSnapshot(root, identifier, { required = true } = {}) 
     }
   }
   return { ...found, items };
+}
+
+export async function normalizeLocalSlugs(local) {
+  const renames = [];
+  for (const type of ["agent", "skill", "project"])
+    for (const item of local.items[type]) {
+      const expectedSlug = slugify(item.name || item.title);
+      if (!expectedSlug) throw new Error(`${type} ${item.id} name must produce a non-empty slug`);
+      const target = join(dirname(item.localDir), expectedSlug);
+      if (target !== item.localDir) renames.push({ type, id: item.id, source: item.localDir, target });
+    }
+  for (const entry of renames)
+    try {
+      await stat(entry.target);
+      throw new Error(`${entry.type} ${entry.id} slug target already exists: ${entry.target}`);
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+  for (const entry of renames) await rename(entry.source, entry.target);
+  return renames;
 }
 
 async function trash(root, workspaceDir, path) {
@@ -106,6 +150,7 @@ export async function writeLocal(root, remote, hard, local) {
     for (const item of remote.items[type]) {
       const itemDir = join(dir, `${type}s`, slugify(item.name || item.title));
       await write(join(itemDir, marker), formattedJson(pick(item, fieldsFor(type))));
+      if (type === "project") await write(join(itemDir, "resources.json"), formattedJson((item.resources || []).map(normalizedProjectResource)));
       if (type === "agent") await write(join(itemDir, "instructions.md"), String(item.instructions ?? ""));
       if (type === "skill") {
         await write(join(itemDir, "SKILL.md"), String(item.content ?? ""));

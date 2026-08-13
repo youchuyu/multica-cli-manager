@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createProject } from '../src/commands/create-project.mjs';
@@ -11,6 +11,7 @@ const workspaceId = '11111111-1111-4111-8111-111111111111';
 const agentId = '22222222-2222-4222-8222-222222222222';
 const skillId = '33333333-3333-4333-8333-333333333333';
 const projectId = '44444444-4444-4444-8444-444444444444';
+const projectResourceId = '55555555-5555-4555-8555-555555555555';
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'multica-sync-'));
@@ -20,7 +21,7 @@ async function fixture() {
     workspace: { id: workspaceId, name: 'Demo', slug: 'demo', description: 'excluded' },
     agents: [{ id: agentId, name: 'Planner', description: 'Plans', runtime_id: 'runtime', model: 'gpt-5', thinking_level: 'medium', permission_mode: 'private', max_concurrent_tasks: 6, instructions: 'Plan.\n', custom_env: { TOKEN: 'secret' }, status: 'idle' }],
     skills: [{ id: skillId, name: 'Guide', description: 'Routes work', content: '# Guide\n', config: { hidden: true }, files: [{ path: 'references/a.md', content: 'A\n' }] }],
-    projects: [{ id: projectId, title: 'Roadmap', description: 'Work', status: 'planned', priority: 'high' }]
+    projects: [{ id: projectId, title: 'Roadmap', description: 'Work', status: 'planned', priority: 'high', resources: [{ id: projectResourceId, project_id: projectId, workspace_id: workspaceId, resource_type: 'github_repo', resource_ref: { url: 'https://example.com/roadmap.git' }, label: null, position: 0, created_at: 'ignored' }] }]
   }));
   const executable = `#!/usr/bin/env node
 import { readFileSync, writeFileSync, appendFileSync } from 'node:fs';
@@ -33,11 +34,15 @@ const input = readFileSync(0, 'utf8'); let result; let mutated = false;
 if (args[0] === 'workspace' && args[1] === 'get') result = state.workspace;
 else if (args[1] === 'list' && ['agent','skill','project'].includes(args[0])) result = state[args[0] + 's'].map(({id,name,title}) => ({id,name,title}));
 else if (args[0] === 'skill' && args[1] === 'files' && args[2] === 'list') result = state.skills.find(x => x.id === args[3]).files;
+else if (args[0] === 'project' && args[1] === 'resource' && args[2] === 'list') result = state.projects.find(x => x.id === args[3]).resources;
+else if (args[0] === 'project' && args[1] === 'resource' && args[2] === 'add') { const x=state.projects.find(x=>x.id===args[3]); const resource={id:'66666666-6666-4666-8666-666666666666',resource_type:option('--type'),resource_ref:JSON.parse(option('--ref')),label:option('--label')??null}; x.resources.push(resource); mutated=true; result=resource; }
+else if (args[0] === 'project' && args[1] === 'resource' && args[2] === 'update') { const x=state.projects.find(x=>x.id===args[3]); const resource=x.resources.find(r=>r.id===args[4]); resource.resource_ref=JSON.parse(option('--ref')); resource.label=args.includes('--clear-label')?null:option('--label'); mutated=true; result=resource; }
+else if (args[0] === 'project' && args[1] === 'resource' && args[2] === 'remove') { const x=state.projects.find(x=>x.id===args[3]); x.resources=x.resources.filter(r=>r.id!==args[4]); mutated=true; result={}; }
 else if (args[1] === 'get') result = state[args[0] + 's'].find(x => x.id === args[2]);
 else if (args[0] === 'agent' && args[1] === 'update') { const x = state.agents.find(x => x.id === args[2]); for (const [flag,key] of [['--name','name'],['--description','description'],['--instructions','instructions'],['--runtime-id','runtime_id'],['--model','model'],['--thinking-level','thinking_level'],['--permission-mode','permission_mode']]) if (args.includes(flag)) x[key] = option(flag); if (args.includes('--max-concurrent-tasks')) x.max_concurrent_tasks = Number(option('--max-concurrent-tasks')); mutated=true; result=x; }
 else if (args[0] === 'skill' && args[1] === 'update') { const x=state.skills.find(x=>x.id===args[2]); if(args.includes('--name')) x.name=option('--name'); if(args.includes('--description')) x.description=option('--description'); if(args.includes('--content-stdin')) x.content=input; mutated=true; result=x; }
 else if (args[0] === 'skill' && args[1] === 'files' && args[2] === 'upsert') { const x=state.skills.find(x=>x.id===args[3]); const path=option('--path'); const file=x.files.find(f=>f.path===path); if(file) file.content=input; else x.files.push({path,content:input}); mutated=true; result={path}; }
-else if (args[0] === 'project' && args[1] === 'update') { const x=state.projects.find(x=>x.id===args[2]); x.title=option('--title'); x.description=option('--description'); x.status=option('--status'); mutated=true; result=x; }
+else if (args[0] === 'project' && args[1] === 'update') { const x=state.projects.find(x=>x.id===args[2]); for (const [flag,key] of [['--title','title'],['--description','description'],['--status','status']]) if (args.includes(flag)) x[key]=option(flag); mutated=true; result=x; }
 else { console.error('unsupported', args.join(' ')); process.exit(2); }
 if(mutated) writeFileSync(statePath, JSON.stringify(state)); process.stdout.write(JSON.stringify(result));
 `;
@@ -77,6 +82,7 @@ test('pull writes minimal JSON, markdown, and nested Skill files', async () => {
   assert.equal(await readFile(join(base, 'agents/planner/instructions.md'), 'utf8'), 'Plan.\n');
   assert.equal(await readFile(join(base, 'skills/guide/references/a.md'), 'utf8'), 'A\n');
   assert.deepEqual(JSON.parse(await readFile(join(base, 'projects/roadmap/project.json'), 'utf8')), { id: projectId, title: 'Roadmap', description: 'Work', status: 'planned' });
+  assert.deepEqual(JSON.parse(await readFile(join(base, 'projects/roadmap/resources.json'), 'utf8')), [{ id: projectResourceId, resource_type: 'github_repo', resource_ref: { url: 'https://example.com/roadmap.git' }, label: null }]);
 });
 
 test('push dry-run makes no writes, then defaults to field-level update and verification', async () => {
@@ -87,6 +93,7 @@ test('push dry-run makes no writes, then defaults to field-level update and veri
     const agentPath = join(base, 'agents/planner/agent.json'); const agent = JSON.parse(await readFile(agentPath, 'utf8')); agent.description = 'Changed'; await writeFile(agentPath, JSON.stringify(agent, null, 2) + '\n');
     await writeFile(join(base, 'agents/planner/instructions.md'), 'New plan.\n');
     await writeFile(join(base, 'skills/guide/references/a.md'), 'B\n');
+    const resourcesPath = join(base, 'projects/roadmap/resources.json'); const resources = JSON.parse(await readFile(resourcesPath, 'utf8')); resources.push({ resource_ref: { url: 'https://example.com/new.git' } }); await writeFile(resourcesPath, JSON.stringify(resources, null, 2) + '\n');
     const before = (await readFile(f.callsPath, 'utf8')).trim().split('\n').length;
     await syncWorkspace({ root: f.root, action: 'push', workspace: 'demo', dryRun: true });
     const previewCalls = (await readFile(f.callsPath, 'utf8')).trim().split('\n').slice(before).map(JSON.parse);
@@ -95,6 +102,7 @@ test('push dry-run makes no writes, then defaults to field-level update and veri
     const state = JSON.parse(await readFile(f.statePath, 'utf8'));
     assert.equal(state.agents[0].description, 'Changed'); assert.equal(state.agents[0].instructions, 'New plan.\n');
     assert.equal(state.skills[0].files[0].content, 'B\n');
+    assert.equal(state.projects[0].resources.some((resource) => resource.resource_ref.url === 'https://example.com/new.git' && resource.resource_type === 'github_repo'), true);
     const calls = (await readFile(f.callsPath, 'utf8')).trim().split('\n').map(JSON.parse);
     assert.equal(calls.some((args) => args[0] === 'skill' && args[1] === 'files' && args[2] === 'upsert'), true);
     const agentUpdate = calls.find((args) => args[0] === 'agent' && args[1] === 'update');
@@ -111,5 +119,55 @@ test('push rejects a missing or invalid resource id before writes', async () => 
     await syncWorkspace({ root: f.root, action: 'pull', workspace: 'demo' });
     const path = join(f.root, 'src/workspaces/demo/agents/planner/agent.json'); const value = JSON.parse(await readFile(path, 'utf8')); value.id = 'invalid'; await writeFile(path, JSON.stringify(value));
     await assert.rejects(syncWorkspace({ root: f.root, action: 'push', workspace: 'demo' }), /valid remote id/);
+  } finally { process.env = old; }
+});
+
+test('push renames Agent, Skill, and Project directories to match changed names', async () => {
+  const f = await fixture(); const old = { ...process.env }; Object.assign(process.env, f.env);
+  try {
+    await syncWorkspace({ root: f.root, action: 'pull', workspace: 'demo' });
+    const base = join(f.root, 'src/workspaces/demo');
+    for (const [path, field, name] of [
+      ['agents/planner/agent.json', 'name', 'Lead Planner'],
+      ['skills/guide/skill.json', 'name', 'Routing Guide'],
+      ['projects/roadmap/project.json', 'title', 'Product Roadmap'],
+    ]) {
+      const file = join(base, path); const value = JSON.parse(await readFile(file, 'utf8'));
+      value[field] = name; await writeFile(file, JSON.stringify(value, null, 2) + '\n');
+    }
+    await syncWorkspace({ root: f.root, action: 'push', workspace: 'demo', dryRun: true });
+    await stat(join(base, 'agents/planner/agent.json'));
+    await syncWorkspace({ root: f.root, action: 'push', workspace: 'demo' });
+    await stat(join(base, 'agents/lead-planner/agent.json'));
+    await stat(join(base, 'skills/routing-guide/skill.json'));
+    await stat(join(base, 'projects/product-roadmap/project.json'));
+    await syncWorkspace({ root: f.root, action: 'pull', workspace: 'demo' });
+  } finally { process.env = old; }
+});
+
+test('push rejects a slug rename when the target directory exists', async () => {
+  const f = await fixture(); const old = { ...process.env }; Object.assign(process.env, f.env);
+  try {
+    await syncWorkspace({ root: f.root, action: 'pull', workspace: 'demo' });
+    const base = join(f.root, 'src/workspaces/demo/agents');
+    const path = join(base, 'planner/agent.json'); const value = JSON.parse(await readFile(path, 'utf8'));
+    value.name = 'Existing'; await writeFile(path, JSON.stringify(value, null, 2) + '\n');
+    await mkdir(join(base, 'existing'));
+    await assert.rejects(syncWorkspace({ root: f.root, action: 'push', workspace: 'demo' }), /slug target already exists/);
+    const state = JSON.parse(await readFile(f.statePath, 'utf8'));
+    assert.equal(state.agents[0].name, 'Planner');
+  } finally { process.env = old; }
+});
+
+test('rejects duplicate Project resource identities before writes', async () => {
+  const f = await fixture(); const old = { ...process.env }; Object.assign(process.env, f.env);
+  try {
+    await syncWorkspace({ root: f.root, action: 'pull', workspace: 'demo' });
+    const path = join(f.root, 'src/workspaces/demo/projects/roadmap/resources.json');
+    const resource = JSON.parse(await readFile(path, 'utf8'))[0];
+    await writeFile(path, JSON.stringify([resource, resource]));
+    await assert.rejects(syncWorkspace({ root: f.root, action: 'push', workspace: 'demo' }), /duplicate project resource id/);
+    await writeFile(path, JSON.stringify([{ resource_ref: { url: 'https://example.com/new.git' } }, { resource_ref: { url: 'https://example.com/new.git' } }]));
+    await assert.rejects(syncWorkspace({ root: f.root, action: 'push', workspace: 'demo' }), /duplicate new project resource/);
   } finally { process.env = old; }
 });

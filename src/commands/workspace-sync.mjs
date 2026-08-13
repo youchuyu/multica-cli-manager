@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { formattedJson } from "../workspace/format.mjs";
-import { localSnapshot, writeLocal } from "../workspace/local.mjs";
+import { localSnapshot, normalizeLocalSlugs, writeLocal } from "../workspace/local.mjs";
 import { display, normalized, plan } from "../workspace/plan.mjs";
 import { applyPush, remoteSnapshot } from "../workspace/remote.mjs";
 import { readJson, write } from "../workspace/shared.mjs";
@@ -41,7 +41,7 @@ export async function syncWorkspace(options) {
     );
   }
   const remote = await remoteSnapshot(identifier, profile);
-  const local = await localSnapshot(root, identifier, {
+  let local = await localSnapshot(root, identifier, {
     required: action === "push",
   });
   if (local && local.workspace.id !== remote.id)
@@ -62,6 +62,10 @@ export async function syncWorkspace(options) {
     throw error;
   }
   if (dryRun) return;
+  if (action === "push") {
+    await normalizeLocalSlugs(local);
+    local = await localSnapshot(root, identifier);
+  }
   if (action === "pull") await writeLocal(root, remote, hard, local);
   else await applyPush(syncPlan, local, remote);
   const verifyRemote = await remoteSnapshot(remote.id, profile);

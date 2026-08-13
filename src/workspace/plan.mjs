@@ -5,6 +5,7 @@ import {
   WORKSPACE_FIELDS,
   changedFields,
   normalizeText,
+  normalizedProjectResource,
   pick,
 } from "./format.mjs";
 
@@ -46,6 +47,7 @@ export function normalized(snapshot) {
           ]),
         );
       }
+      if (type === "project") data.resources = (value.resources || []).map(normalizedProjectResource).map(({ id, ...resource }) => resource);
       out[keyOf(type, value)] = data;
     }
   return out;
@@ -79,7 +81,7 @@ export function plan(direction, source, target, base, hard) {
         );
       else {
         const fields = changedFields(value, current, Object.keys(value)).filter(
-          (x) => x !== "id" && x !== "files",
+          (x) => x !== "id" && x !== "files" && x !== "resources",
         );
         if (fields.length)
           operations.push({
@@ -97,6 +99,20 @@ export function plan(direction, source, target, base, hard) {
         id,
         name: value.name || value.title || value.id,
       });
+  }
+  for (const project of source.items.project) {
+    const targetProject = target?.items.project.find((x) => x.id === project.id);
+    if (!targetProject) continue;
+    const sourceResources = (project.resources || []).map(normalizedProjectResource);
+    const targetResources = (targetProject.resources || []).map(normalizedProjectResource);
+    const targetById = Object.fromEntries(targetResources.filter((x) => x.id).map((x) => [x.id, x]));
+    const sourceIds = new Set(sourceResources.flatMap((x) => x.id ? [x.id] : []));
+    for (const resource of sourceResources) {
+      const current = resource.id ? targetById[resource.id] : targetResources.find((x) => !sourceIds.has(x.id) && x.resource_type === resource.resource_type && JSON.stringify(x.resource_ref) === JSON.stringify(resource.resource_ref));
+      if (!current) operations.push({ action: "upsert", resource_type: "project_resource", project_id: project.id, resource });
+      else if (resource.id && JSON.stringify(resource) !== JSON.stringify(current)) operations.push({ action: "update", resource_type: "project_resource", project_id: project.id, id: resource.id, resource });
+    }
+    for (const resource of targetResources) if (resource.id && !sourceIds.has(resource.id) && !sourceResources.some((x) => !x.id && x.resource_type === resource.resource_type && JSON.stringify(x.resource_ref) === JSON.stringify(resource.resource_ref))) operations.push({ action: "delete", resource_type: "project_resource", project_id: project.id, id: resource.id, resource });
   }
   for (const [key, value] of Object.entries(targetNorm))
     if (!sourceNorm[key]) {

@@ -3,6 +3,19 @@ import { relative, sep } from 'node:path';
 export const AGENT_FIELDS = ['id', 'name', 'description', 'runtime_id', 'model', 'thinking_level', 'permission_mode', 'max_concurrent_tasks'];
 export const SKILL_FIELDS = ['id', 'name', 'description'];
 export const PROJECT_FIELDS = ['id', 'title', 'description', 'status'];
+export const PROJECT_RESOURCE_FIELDS = ['id', 'resource_type', 'resource_ref', 'label'];
+
+export function normalizedProjectResource(value) {
+  return {
+    ...(value?.id ? { id: value.id } : {}),
+    resource_type: value?.resource_type || 'github_repo',
+    resource_ref: value?.resource_ref,
+    label: value?.label ?? null,
+  };
+}
+
+export const projectResourceKey = (value) =>
+  `${value?.resource_type || 'github_repo'}:${JSON.stringify(value?.resource_ref ?? null)}`;
 export const WORKSPACE_FIELDS = ['id', 'name', 'slug'];
 
 export const slugify = (name) => String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
