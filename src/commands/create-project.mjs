@@ -1,6 +1,11 @@
-import { access, mkdir, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const templateDir = join(dirname(fileURLToPath(import.meta.url)), '../../templates');
+
+const readTemplate = (name) => readFile(join(templateDir, name), 'utf8');
 
 async function assertEmpty(path) {
   try { await access(path, constants.F_OK); throw new Error(`target already exists: ${path}`); }
@@ -11,9 +16,14 @@ export async function createProject(target, requestedName) {
   await assertEmpty(target);
   const name = basename(requestedName).toLowerCase().replace(/[^a-z0-9._-]+/g, '-');
   if (!name) throw new Error('a valid project name is required');
+  const [readmeTemplate, agentsTemplate, gitignoreTemplate] = await Promise.all([
+    readTemplate('README.md'),
+    readTemplate('AGENTS.md'),
+    readTemplate('gitignore')
+  ]);
   await mkdir(join(target, 'src/workspaces'), { recursive: true });
   await writeFile(join(target, 'src/workspaces/.gitkeep'), '');
-  await writeFile(join(target, '.gitignore'), 'node_modules/\n.env\n.DS_Store\n');
+  await writeFile(join(target, '.gitignore'), gitignoreTemplate);
   await writeFile(join(target, 'package.json'), JSON.stringify({
     name, private: true, version: '0.1.0', type: 'module',
     scripts: {
@@ -23,7 +33,8 @@ export async function createProject(target, requestedName) {
     },
     devDependencies: { 'multica-cli-manager': '^0.1.0' }
   }, null, 2) + '\n');
-  await writeFile(join(target, 'README.md'), `# ${name}\n\nMultica workspace declarations live under \`src/workspaces/\`. The directory is empty until the first pull. Structured declarations use JSON; Agent instructions and Skill files remain ordinary files.\n\n\`\`\`sh\nmultica setup\nnpm install\nnpm run workspace:pull -- --workspace <slug>\nnpm run workspace:diff -- --workspace <slug>\nnpm run workspace:push -- --workspace <slug>\nnpm run workspace:push -- --workspace <slug> --apply\n\`\`\`\n\nPush is preview-only unless \`--apply\` is explicit. Credentials stay in the Multica CLI profile. v1 updates existing resources only and never creates, deletes, archives, or restores them.\n`);
+  await writeFile(join(target, 'README.md'), readmeTemplate.replaceAll('{{PROJECT_NAME}}', name));
+  await writeFile(join(target, 'AGENTS.md'), agentsTemplate);
   console.log(`Created ${name} at ${target}`);
   console.log(`Next: cd ${name} && npm install`);
 }

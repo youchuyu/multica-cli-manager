@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { resolve } from 'node:path';
-import { createProject } from '../src/create-project.mjs';
-import { syncWorkspace } from '../src/workspace-sync.mjs';
+import { createProject } from '../src/commands/create-project.mjs';
+import { syncWorkspace } from '../src/commands/workspace-sync.mjs';
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -11,24 +11,29 @@ try {
   if (!command || command === '--help' || command === '-h') {
     console.log(`Usage:
   npx multica-cli-manager <project-name>
-  multica-cli-manager workspace pull --workspace <slug|id> [--profile <name>]
-  multica-cli-manager workspace diff --workspace <slug|id> [--profile <name>]
-  multica-cli-manager workspace push --workspace <slug|id> [--profile <name>] [--apply]
+  multica-cli-manager workspace pull <slug|id> [--profile <name>] [--dry-run] [--hard]
+  multica-cli-manager workspace diff <slug|id> [--profile <name>]
+  multica-cli-manager workspace push <slug|id> [--profile <name>] [--dry-run] [--hard]
 
-push previews by default. --apply updates existing Agent, Skill, Skill files,
-and Project resources, then rereads the remote state for verification.`);
+pull and push validate, execute, and reread for verification by default.
+--dry-run prints the complete plan without writing. --hard resolves conflicts in
+the requested direction and enables target cleanup; it never bypasses schema,
+identity, scope, or path safety checks. --workspace remains temporarily supported.`);
   } else if (command === 'workspace') {
     const action = args[1];
     if (!['pull', 'diff', 'push'].includes(action)) throw new Error('workspace action must be pull, diff, or push');
+    const positional = args[2]?.startsWith('-') ? undefined : args[2];
+    const flagged = value('--workspace');
+    if (positional && flagged && positional !== flagged) throw new Error('positional workspace and --workspace must match');
     await syncWorkspace({
       root: process.cwd(), action,
-      workspace: value('--workspace'), profile: value('--profile'),
-      apply: args.includes('--apply')
+      workspace: positional || flagged, profile: value('--profile'),
+      dryRun: args.includes('--dry-run'), hard: args.includes('--hard'), output: value('--output') || 'text'
     });
   } else {
     await createProject(resolve(process.cwd(), command), command);
   }
 } catch (error) {
   console.error(`multica-cli-manager: ${error.message}`);
-  process.exitCode = 1;
+  process.exitCode = error.code === 'CONFLICT' ? 2 : 1;
 }

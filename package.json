@@ -4,7 +4,7 @@
   "description": "Scaffold and synchronize versioned Multica workspace snapshots",
   "type": "module",
   "bin": { "multica-cli-manager": "./bin/multica-cli-manager.mjs" },
-  "files": ["bin", "src", "README.md"],
+  "files": ["bin", "src", "templates", "README.md"],
   "scripts": {
     "test": "node --test"
   }

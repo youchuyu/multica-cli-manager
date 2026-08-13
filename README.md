@@ -8,11 +8,13 @@ cd my-multica-project
 npm install
 multica setup
 
-npm run workspace:pull -- --workspace <slug-or-id>
-npm run workspace:diff -- --workspace <slug-or-id>
-npm run workspace:push -- --workspace <slug-or-id>
-npm run workspace:push -- --workspace <slug-or-id> --apply
+npm run workspace:pull -- <slug-or-id>
+npm run workspace:diff -- <slug-or-id>
+npm run workspace:push -- <slug-or-id>
+npm run workspace:push -- <slug-or-id> --dry-run
 ```
+
+生成的项目根目录包含 `README.md`、`AGENTS.md`、`package.json` 和 `.gitignore`；Workspace 声明初始为空，首次 pull 后写入 `src/workspaces/`。
 
 首次 pull 会生成：
 
@@ -29,6 +31,8 @@ src/workspaces/<workspace-slug>/
 └── projects/<project-slug>/project.json
 ```
 
-JSON 字段直接映射 Multica CLI 的 `snake_case` 数据。v1 只维护核心字段；不会保存凭据、运行态、统计字段、Agent-Skill assignment 或 Project resources。
+JSON 字段直接映射 Multica CLI 的 `snake_case` 数据。只维护核心字段；不会保存凭据、运行态、统计字段、Agent-Skill assignment 或 Project resources。
 
-`push` 默认只预览。只有显式添加 `--apply` 才会更新远端，并在更新后重新读取验证。本版本不创建、删除、归档或恢复资源，也不会删除远端 Skill 附属文件。认证信息由 Multica CLI profile 管理，可通过 `--profile <name>` 选择。
+`pull` 和 `push` 默认完成完整检查、执行和复读验证；`--dry-run` 只输出计划、保证零写入。默认模式遇到冲突或目标端额外资源会阻断；`--hard` 以同步源为权威并清理目标端额外内容。hard pull 将本地额外目录或文件移至 `.multica/trash/`；hard push 归档额外 Agent，并删除额外 Skill、Project 和 Skill 附属文件。`--hard` 仍不会绕过结构、身份、范围或路径检查。
+
+当前仅更新已有远端资源；本版本不创建资源。认证信息由 Multica CLI profile 管理，可通过 `--profile <name>` 选择。`.multica/states/` 保存不含凭据的同步基线，默认不进入 Git。
