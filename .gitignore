@@ -1,0 +1,4 @@
+node_modules/
+.multica/states/
+.multica/cache/
+multica-cli-manager-0.1.0.tgz
