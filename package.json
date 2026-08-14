@@ -2,6 +2,25 @@
   "name": "multica-cli-manager",
   "version": "0.1.0",
   "description": "Scaffold and synchronize versioned Multica workspace snapshots",
+  "author": "youchuyu",
+  "keywords": [
+    "multica",
+    "workspace",
+    "scaffold",
+    "synchronization",
+    "cli"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/youchuyu/multica-cli-manager.git"
+  },
+  "bugs": {
+    "url": "https://github.com/youchuyu/multica-cli-manager/issues"
+  },
+  "homepage": "https://github.com/youchuyu/multica-cli-manager#readme",
+  "engines": {
+    "node": ">=18"
+  },
   "type": "module",
   "bin": { "multica-cli-manager": "./bin/multica-cli-manager.mjs" },
   "files": ["bin", "src", "templates", "README.md"],
