@@ -38,6 +38,9 @@ else if (args[0] === 'project' && args[1] === 'resource' && args[2] === 'list') 
 else if (args[0] === 'project' && args[1] === 'resource' && args[2] === 'add') { const x=state.projects.find(x=>x.id===args[3]); const resource={id:'66666666-6666-4666-8666-666666666666',resource_type:option('--type'),resource_ref:JSON.parse(option('--ref')),label:option('--label')??null}; x.resources.push(resource); mutated=true; result=resource; }
 else if (args[0] === 'project' && args[1] === 'resource' && args[2] === 'update') { const x=state.projects.find(x=>x.id===args[3]); const resource=x.resources.find(r=>r.id===args[4]); resource.resource_ref=JSON.parse(option('--ref')); resource.label=args.includes('--clear-label')?null:option('--label'); mutated=true; result=resource; }
 else if (args[0] === 'project' && args[1] === 'resource' && args[2] === 'remove') { const x=state.projects.find(x=>x.id===args[3]); x.resources=x.resources.filter(r=>r.id!==args[4]); mutated=true; result={}; }
+else if (args[0] === 'agent' && args[1] === 'create') { const x={id:'77777777-7777-4777-8777-777777777777',name:option('--name'),description:option('--description'),runtime_id:option('--runtime-id'),model:option('--model'),thinking_level:option('--thinking-level'),permission_mode:option('--permission-mode'),max_concurrent_tasks:Number(option('--max-concurrent-tasks')),instructions:option('--instructions')}; state.agents.push(x); mutated=true; result=x; }
+else if (args[0] === 'skill' && args[1] === 'create') { const x={id:'88888888-8888-4888-8888-888888888888',name:option('--name'),description:option('--description'),content:input,files:[]}; state.skills.push(x); mutated=true; result=x; }
+else if (args[0] === 'project' && args[1] === 'create') { const x={id:'99999999-9999-4999-8999-999999999999',title:option('--title'),description:option('--description'),status:option('--status'),resources:[]}; state.projects.push(x); mutated=true; result=x; }
 else if (args[1] === 'get') result = state[args[0] + 's'].find(x => x.id === args[2]);
 else if (args[0] === 'agent' && args[1] === 'update') { const x = state.agents.find(x => x.id === args[2]); for (const [flag,key] of [['--name','name'],['--description','description'],['--instructions','instructions'],['--runtime-id','runtime_id'],['--model','model'],['--thinking-level','thinking_level'],['--permission-mode','permission_mode']]) if (args.includes(flag)) x[key] = option(flag); if (args.includes('--max-concurrent-tasks')) x.max_concurrent_tasks = Number(option('--max-concurrent-tasks')); mutated=true; result=x; }
 else if (args[0] === 'skill' && args[1] === 'update') { const x=state.skills.find(x=>x.id===args[2]); if(args.includes('--name')) x.name=option('--name'); if(args.includes('--description')) x.description=option('--description'); if(args.includes('--content-stdin')) x.content=input; mutated=true; result=x; }
@@ -110,6 +113,37 @@ test('push dry-run makes no writes, then defaults to field-level update and veri
     assert.equal(agentUpdate.includes('--instructions'), true);
     assert.equal(agentUpdate.includes('--model'), false);
     assert.equal(calls.some((args) => ['create', 'delete', 'archive', 'restore'].includes(args[1]) || args[2] === 'delete'), false);
+  } finally { process.env = old; }
+});
+
+test('push creates Agent, Skill, Project, their files, and Project resources', async () => {
+  const f = await fixture(); const old = { ...process.env }; Object.assign(process.env, f.env);
+  try {
+    await syncWorkspace({ root: f.root, action: 'pull', workspace: 'demo' });
+    const base = join(f.root, 'src/workspaces/demo');
+    const newAgentId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const newSkillId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const newProjectId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    const newResourceId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+    await mkdir(join(base, 'agents/executor'));
+    await writeFile(join(base, 'agents/executor/agent.json'), JSON.stringify({ id: newAgentId, name: 'Executor', description: 'Executes', runtime_id: 'runtime', model: 'gpt-5', thinking_level: 'medium', permission_mode: 'private', max_concurrent_tasks: 2 }, null, 2));
+    await writeFile(join(base, 'agents/executor/instructions.md'), 'Execute.\n');
+    await mkdir(join(base, 'skills/checker/references'), { recursive: true });
+    await writeFile(join(base, 'skills/checker/skill.json'), JSON.stringify({ id: newSkillId, name: 'Checker', description: 'Checks' }, null, 2));
+    await writeFile(join(base, 'skills/checker/SKILL.md'), '# Checker\n');
+    await writeFile(join(base, 'skills/checker/references/check.md'), 'Check.\n');
+    await mkdir(join(base, 'projects/release'));
+    await writeFile(join(base, 'projects/release/project.json'), JSON.stringify({ id: newProjectId, title: 'Release', description: 'Ship', status: 'planned' }, null, 2));
+    await writeFile(join(base, 'projects/release/resources.json'), JSON.stringify([{ id: newResourceId, resource_type: 'github_repo', resource_ref: { url: 'https://example.com/release.git' }, label: 'Release repo' }], null, 2));
+    await syncWorkspace({ root: f.root, action: 'push', workspace: 'demo' });
+    const state = JSON.parse(await readFile(f.statePath, 'utf8'));
+    assert.equal(state.agents.some((item) => item.name === 'Executor'), true);
+    assert.equal(state.skills.find((item) => item.name === 'Checker').files[0].path, 'references/check.md');
+    assert.equal(state.projects.find((item) => item.title === 'Release').resources[0].resource_ref.url, 'https://example.com/release.git');
+    assert.equal(JSON.parse(await readFile(join(base, 'agents/executor/agent.json'), 'utf8')).id, '77777777-7777-4777-8777-777777777777');
+    assert.equal(JSON.parse(await readFile(join(base, 'skills/checker/skill.json'), 'utf8')).id, '88888888-8888-4888-8888-888888888888');
+    assert.equal(JSON.parse(await readFile(join(base, 'projects/release/project.json'), 'utf8')).id, '99999999-9999-4999-8999-999999999999');
+    assert.equal(JSON.parse(await readFile(join(base, 'projects/release/resources.json'), 'utf8'))[0].id, '66666666-6666-4666-8666-666666666666');
   } finally { process.env = old; }
 });
 

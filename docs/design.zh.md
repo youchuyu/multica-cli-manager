@@ -282,13 +282,13 @@ hard push 对远端独有资源的处理是：
 | `keep` | 两端一致 | 无需执行 |
 | `update` | 更新资源字段或主内容 | push 执行 |
 | `upsert` | 新增或更新 Skill 附属文件 | push 执行 |
-| `create` | source 存在、target 不存在 | 仅展示，不创建 |
+| `create` | source 存在、target 不存在 | push 时创建 Agent、Skill 或 Project，并回写远端 ID |
 | `local-only` / `remote-only` | target 独有，默认阻断 | 不执行 |
 | `delete-local` | hard pull 清理本地独有内容 | pull 移入回收站 |
 | `archive` | hard push 归档远端 Agent | push 执行 |
 | `delete` | hard push 删除远端资源或文件 | push 执行 |
 
-需要特别注意：本版本不会创建远端资源。如果本地声明含远端不存在的 UUID，计划会显示 `CREATE`，但 push 后的复读验证会因目标未出现该资源而失败。正确工作流是先通过原生 CLI 或平台创建资源，再 pull 获取其真实 ID。
+push 会创建远端不存在的 Agent、Skill 和 Project，并将原生 CLI 返回的真实 ID 回写到本地快照。新建 Project 的附属资源会在 Project 创建后添加；Skill 的附属文件会在 Skill 创建后 upsert。创建前的本地 UUID 仅用于本地计划关联，成功后不再保留。
 
 ## 12. 原生 CLI 适配
 

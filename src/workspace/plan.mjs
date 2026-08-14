@@ -102,14 +102,24 @@ export function plan(direction, source, target, base, hard) {
   }
   for (const project of source.items.project) {
     const targetProject = target?.items.project.find((x) => x.id === project.id);
-    if (!targetProject) continue;
+    if (!targetProject) {
+      for (const resource of (project.resources || []).map(normalizedProjectResource))
+        operations.push({
+          action: "upsert",
+          resource_type: "project_resource",
+          project_id: project.id,
+          resource,
+          name: resource.label || resource.resource_ref?.url || resource.resource_type,
+        });
+      continue;
+    }
     const sourceResources = (project.resources || []).map(normalizedProjectResource);
     const targetResources = (targetProject.resources || []).map(normalizedProjectResource);
     const targetById = Object.fromEntries(targetResources.filter((x) => x.id).map((x) => [x.id, x]));
     const sourceIds = new Set(sourceResources.flatMap((x) => x.id ? [x.id] : []));
     for (const resource of sourceResources) {
       const current = resource.id ? targetById[resource.id] : targetResources.find((x) => !sourceIds.has(x.id) && x.resource_type === resource.resource_type && JSON.stringify(x.resource_ref) === JSON.stringify(resource.resource_ref));
-      if (!current) operations.push({ action: "upsert", resource_type: "project_resource", project_id: project.id, resource });
+      if (!current) operations.push({ action: "upsert", resource_type: "project_resource", project_id: project.id, resource, name: resource.label || resource.resource_ref?.url || resource.resource_type });
       else if (resource.id && JSON.stringify(resource) !== JSON.stringify(current)) operations.push({ action: "update", resource_type: "project_resource", project_id: project.id, id: resource.id, resource });
     }
     for (const resource of targetResources) if (resource.id && !sourceIds.has(resource.id) && !sourceResources.some((x) => !x.id && x.resource_type === resource.resource_type && JSON.stringify(x.resource_ref) === JSON.stringify(resource.resource_ref))) operations.push({ action: "delete", resource_type: "project_resource", project_id: project.id, id: resource.id, resource });

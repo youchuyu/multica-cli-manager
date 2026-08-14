@@ -1,6 +1,8 @@
 import { listItems, runMultica } from "../multica/client.mjs";
+import { join } from "node:path";
 import { slugify } from "./format.mjs";
-import { idOf } from "./shared.mjs";
+import { fieldsFor, idOf, write } from "./shared.mjs";
+import { formattedJson, pick } from "./format.mjs";
 
 function validateRemoteProjectResources(projectId, resources) {
   const seen = new Set();
@@ -74,13 +76,62 @@ export async function remoteSnapshot(identifier, profile) {
 const localById = (local, type, id) =>
   local.items[type].find((x) => x.id === id);
 
+async function persistCreatedItem(item, type, created) {
+  item.id = idOf(created, `created ${type}`);
+  const marker = type === "agent" ? "agent.json" : type === "skill" ? "skill.json" : "project.json";
+  await write(join(item.localDir, marker), formattedJson(pick(item, fieldsFor(type))));
+}
+
+async function persistProjectResources(project) {
+  await write(
+    join(project.localDir, "resources.json"),
+    formattedJson(project.resources.map((resource) => ({
+      ...(resource.id ? { id: resource.id } : {}),
+      resource_type: resource.resource_type,
+      resource_ref: resource.resource_ref,
+      label: resource.label ?? null,
+    }))),
+  );
+}
+
 export async function applyPush(syncPlan, local, remote) {
   const cli = remote.cli;
   let destructiveFailure = false;
+  const projectIds = new Map();
   const execute = async (op) => {
     if (destructiveFailure && ["delete", "archive"].includes(op.action))
       return { ...op, result: "skipped_after_failure" };
     try {
+      if (op.resource_type === "agent" && op.action === "create") {
+        const item = localById(local, "agent", op.id);
+        const created = await runMultica([
+          "agent", "create", "--name", item.name, "--runtime-id", item.runtime_id,
+          "--description", item.description, "--instructions", item.instructions,
+          "--model", item.model, "--thinking-level", item.thinking_level,
+          "--permission-mode", item.permission_mode,
+          "--max-concurrent-tasks", String(item.max_concurrent_tasks),
+        ], cli);
+        await persistCreatedItem(item, "agent", created);
+      }
+      if (op.resource_type === "skill" && op.action === "create") {
+        const item = localById(local, "skill", op.id);
+        const created = await runMultica([
+          "skill", "create", "--name", item.name, "--description", item.description,
+          "--content-stdin",
+        ], { ...cli, input: item.content });
+        await persistCreatedItem(item, "skill", created);
+        for (const [path, content] of Object.entries(item.files))
+          await runMultica(["skill", "files", "upsert", item.id, "--path", path, "--content-stdin"], { ...cli, input: content });
+      }
+      if (op.resource_type === "project" && op.action === "create") {
+        const item = localById(local, "project", op.id);
+        const created = await runMultica([
+          "project", "create", "--title", item.title, "--description", item.description,
+          "--status", item.status,
+        ], cli);
+        projectIds.set(op.id, idOf(created, "created project"));
+        await persistCreatedItem(item, "project", created);
+      }
       if (op.resource_type === "agent" && op.action === "update") {
         const item = localById(local, "agent", op.id);
         const args = ["agent", "update", op.id];
@@ -113,9 +164,24 @@ export async function applyPush(syncPlan, local, remote) {
       }
       if (op.resource_type === "project_resource") {
         const r = op.resource;
-        if (op.action === "upsert") await runMultica(["project", "resource", "add", op.project_id, "--type", r.resource_type || "github_repo", "--ref", JSON.stringify(r.resource_ref), ...(r.label ? ["--label", r.label] : [])], cli);
-        if (op.action === "update") await runMultica(["project", "resource", "update", op.project_id, op.id, "--ref", JSON.stringify(r.resource_ref), ...(r.label ? ["--label", r.label] : ["--clear-label"])], cli);
-        if (op.action === "delete") await runMultica(["project", "resource", "remove", op.project_id, op.id], { ...cli, json: false });
+        const projectId = projectIds.get(op.project_id) || op.project_id;
+        if (op.action === "upsert") {
+          const created = await runMultica(["project", "resource", "add", projectId, "--type", r.resource_type || "github_repo", "--ref", JSON.stringify(r.resource_ref), ...(r.label ? ["--label", r.label] : [])], cli);
+          const previousId = r.id;
+          r.id = idOf(created, "created project resource");
+          const project = local.items.project.find((item) => item.id === projectId);
+          if (project) {
+            const localResource = project.resources.find((resource) =>
+              (previousId && resource.id === previousId) ||
+              (!previousId && resource.resource_type === r.resource_type && JSON.stringify(resource.resource_ref) === JSON.stringify(r.resource_ref)),
+            );
+            if (!localResource) throw new Error(`local Project resource was not found after creation: ${projectId}`);
+            localResource.id = r.id;
+            await persistProjectResources(project);
+          }
+        }
+        if (op.action === "update") await runMultica(["project", "resource", "update", projectId, op.id, "--ref", JSON.stringify(r.resource_ref), ...(r.label ? ["--label", r.label] : ["--clear-label"])], cli);
+        if (op.action === "delete") await runMultica(["project", "resource", "remove", projectId, op.id], { ...cli, json: false });
       }
       if (op.resource_type === "skill_file" && op.action === "upsert") {
         const item = localById(local, "skill", op.skill_id);
@@ -136,16 +202,17 @@ export async function applyPush(syncPlan, local, remote) {
     }
   };
   const priority = (op) => {
-    if (op.action === "update" || op.action === "upsert") return 0;
-    if (op.resource_type === "skill_file" && op.action === "delete") return 1;
-    if (op.resource_type === "agent" && op.action === "archive") return 2;
-    if (op.resource_type === "project" && op.action === "delete") return 3;
-    if (op.resource_type === "skill" && op.action === "delete") return 4;
-    return 5;
+    if (op.action === "create") return 0;
+    if (op.action === "update" || op.action === "upsert") return 1;
+    if (op.resource_type === "skill_file" && op.action === "delete") return 2;
+    if (op.resource_type === "agent" && op.action === "archive") return 3;
+    if (op.resource_type === "project" && op.action === "delete") return 4;
+    if (op.resource_type === "skill" && op.action === "delete") return 5;
+    return 6;
   };
   const results = [];
   for (const op of syncPlan.operations
-    .filter((x) => !["keep", "remote-only", "local-only", "create"].includes(x.action))
+    .filter((x) => !["keep", "remote-only", "local-only"].includes(x.action))
     .sort((a, b) => priority(a) - priority(b)))
     results.push(await execute(op));
   const failed = results.filter((x) => x.result === "failed");
