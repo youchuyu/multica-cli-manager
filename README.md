@@ -23,6 +23,7 @@ src/workspaces/<workspace-slug>/
 ├── workspace.json
 ├── agents/<agent-slug>/
 │   ├── agent.json
+│   ├── custom-env.json
 │   └── instructions.md
 ├── skills/<skill-slug>/
 │   ├── skill.json
@@ -31,8 +32,8 @@ src/workspaces/<workspace-slug>/
 └── projects/<project-slug>/project.json
 ```
 
-JSON 字段直接映射 Multica CLI 的 `snake_case` 数据。只维护核心字段；不会保存凭据、运行态、统计字段、Agent-Skill assignment 或 Project resources。
+JSON 字段直接映射 Multica CLI 的 `snake_case` 数据。Agent 声明同步原生 CLI 支持的模型、推理、service tier、custom args、runtime config、MCP config 和 Skill assignment；`custom-env.json` 通过 `multica agent env get/set` 精确同步。环境变量文件包含真实值，生成项目默认将其排除在 Git 之外，计划和日志只显示字段名而不显示值。
 
 `pull` 和 `push` 默认完成完整检查、执行和复读验证；`--dry-run` 只输出计划、保证零写入。默认模式遇到冲突或目标端额外资源会阻断；`--hard` 以同步源为权威并清理目标端额外内容。hard pull 将本地额外目录或文件移至 `.multica/trash/`；hard push 归档额外 Agent，并删除额外 Skill、Project 和 Skill 附属文件。`--hard` 仍不会绕过结构、身份、范围或路径检查。
 
-当前仅更新已有远端资源；本版本不创建资源。认证信息由 Multica CLI profile 管理，可通过 `--profile <name>` 选择。`.multica/states/` 保存不含凭据的同步基线，默认不进入 Git。
+缺失的 Agent、Skill 和 Project 会通过原生 CLI 创建并回写远端 ID。认证信息由 Multica CLI profile 管理，可通过 `--profile <name>` 选择。`.multica/states/` 对敏感 Agent 配置只保存不可逆指纹，默认不进入 Git。

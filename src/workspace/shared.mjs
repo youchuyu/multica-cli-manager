@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import {
   AGENT_FIELDS,
   PROJECT_FIELDS,
+  SQUAD_FIELDS,
   SKILL_FIELDS,
   WORKSPACE_FIELDS,
 } from "./format.mjs";
@@ -29,4 +30,5 @@ export const fieldsFor = (type) =>
     agent: AGENT_FIELDS,
     skill: SKILL_FIELDS,
     project: PROJECT_FIELDS,
+    squad: SQUAD_FIELDS,
   })[type];

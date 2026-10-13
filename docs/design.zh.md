@@ -5,7 +5,7 @@
 本文描述 `multica-cli-manager` 当前代码的设计与实现边界。项目是原生 `multica` CLI 之上的薄管理层，用于：
 
 1. 生成一个空白、可版本化的 Multica Workspace 声明项目；
-2. 将已有远端 Workspace 的 Agent、Skill 和 Project 拉取为本地文件；
+2. 将已有远端 Workspace 的 Agent、Skill、Project 和 Squad 拉取为本地文件；
 3. 比较本地声明与远端资源；
 4. 在显式命令下把本地变更同步回远端，并在写入后复读验证。
 
@@ -20,13 +20,13 @@
 - **默认安全**：同步前完整读取两端并生成计划；冲突、目标端额外资源和身份不匹配默认阻断。
 - **可预览**：`--dry-run` 输出完整计划，不调用任何修改类命令。
 - **可验证**：实际 pull/push 后重新读取本地和远端，比较规范化状态。
-- **最小声明**：只保存受支持的核心字段，排除凭据、运行态、统计数据和未纳入同步范围的关联关系。
+- **原生配置映射**：保存原生 CLI 支持写入的 Agent 配置与 Skill assignment；custom env 使用独立文件精确同步。
 - **路径安全**：拒绝符号链接、越界路径、非法远端 ID 和结构外字段。
 
 ### 2.2 非目标
 
-- 不创建缺失的远端 Agent、Skill 或 Project；计划中的 `create` 仅表示差异，本版本不会执行创建。
-- 不同步 Agent-Skill assignment、Project resources、运行状态或统计字段。
+- 不实现原生 CLI 未提供的资源操作；Agent、Skill、Project 和 Squad 的创建、更新及关联同步均通过原生 CLI 完成。
+- 不同步运行状态或统计字段；Agent-Skill assignment、Project resources 和 Agent custom env 属于同步范围。
 - 不保存或分发认证信息。
 - 不提供服务端、多 Workspace 事务或跨机器锁。
 - 不保证部分远端写入失败后的自动回滚。
@@ -133,6 +133,10 @@ src/workspaces/<workspace-slug>/
 │   └── <Skill 附属文件>
 └── projects/<project-slug>/
     └── project.json
+└── squads/<squad-slug>/
+    ├── squad.json
+    ├── instructions.md
+    └── members.json
 ```
 
 目录名用于可读性和定位，资源身份以 JSON 中的远端 UUID 为准。所有 JSON 字段沿用原生 CLI 的 `snake_case`。
@@ -140,9 +144,10 @@ src/workspaces/<workspace-slug>/
 | 资源 | 版本化字段/内容 |
 | --- | --- |
 | Workspace | `id`, `name`, `slug` |
-| Agent | `id`, `name`, `description`, `runtime_id`, `model`, `thinking_level`, `permission_mode`, `max_concurrent_tasks`, `instructions.md` |
+| Agent | `id`, `name`, `description`, `runtime_id`, `model`, `thinking_level`, `service_tier`, `permission_mode`, `max_concurrent_tasks`, `custom_args`, `runtime_config`, `mcp_config`, `skill_ids`, `instructions.md`, `custom-env.json` |
 | Skill | `id`, `name`, `description`, `SKILL.md`, 全部附属文本文件 |
 | Project | `id`, `title`, `description`, `status` |
+| Squad | `id`, `name`, `description`, `avatar_url`, `leader_id`, `instructions.md`, `members.json` |
 
 本地解析采用严格模式：声明必须包含该资源的全部受支持字段，也不能出现白名单之外的字段。这能防止“看似已版本化、实际上不会同步”的配置进入仓库。
 
@@ -181,10 +186,11 @@ src/workspaces/<workspace-slug>/
 `remoteSnapshot()`：
 
 1. 执行 `multica workspace get` 解析 Workspace；
-2. 并行列出 Agent、Skill、Project；
+2. 并行列出 Agent、Skill、Project、Squad；
 3. 逐项读取完整资源；
 4. 对每个 Skill 同时读取元数据和文件列表；
-5. 返回附带 profile 和 Workspace ID 的 CLI 上下文。
+5. 对每个 Squad 读取详情和完整成员列表；
+6. 返回附带 profile 和 Workspace ID 的 CLI 上下文。
 
 ### 7.3 比较规范化
 
@@ -198,7 +204,7 @@ src/workspaces/<workspace-slug>/
 .multica/states/<workspace-id>.json
 ```
 
-该文件是三方比较的基线，不含凭据，默认被生成项目的 `.gitignore` 排除。比较包含：
+该文件是三方比较的基线，不保存 custom env 或 MCP 配置明文；敏感配置使用不可逆指纹，且状态目录默认被生成项目的 `.gitignore` 排除。比较包含：
 
 ```text
 source：本次同步方向的权威端
@@ -282,13 +288,13 @@ hard push 对远端独有资源的处理是：
 | `keep` | 两端一致 | 无需执行 |
 | `update` | 更新资源字段或主内容 | push 执行 |
 | `upsert` | 新增或更新 Skill 附属文件 | push 执行 |
-| `create` | source 存在、target 不存在 | push 时创建 Agent、Skill 或 Project，并回写远端 ID |
+| `create` | source 存在、target 不存在 | push 时创建 Agent、Skill、Project 或 Squad，并回写远端 ID |
 | `local-only` / `remote-only` | target 独有，默认阻断 | 不执行 |
 | `delete-local` | hard pull 清理本地独有内容 | pull 移入回收站 |
 | `archive` | hard push 归档远端 Agent | push 执行 |
 | `delete` | hard push 删除远端资源或文件 | push 执行 |
 
-push 会创建远端不存在的 Agent、Skill 和 Project，并将原生 CLI 返回的真实 ID 回写到本地快照。新建 Project 的附属资源会在 Project 创建后添加；Skill 的附属文件会在 Skill 创建后 upsert。创建前的本地 UUID 仅用于本地计划关联，成功后不再保留。
+push 会创建远端不存在的 Agent、Skill、Project 和 Squad，并将原生 CLI 返回的真实 ID 回写到本地快照。新建 Squad 会先映射 leader Agent，再添加成员；创建前的本地 UUID 仅用于本地计划关联，成功后不再保留。
 
 ## 12. 原生 CLI 适配
 
@@ -329,7 +335,7 @@ push 会创建远端不存在的 Agent、Skill 和 Project，并将原生 CLI �
 
 ### 13.4 凭据
 
-本地声明、基线和日志设计上均不需要凭据。认证由 `multica setup` 创建的 profile 管理。本项目不应把 token、环境密钥或 profile 内容写入 Workspace 文件。
+`custom-env.json` 按原生 Agent 配置精确保存真实值，但生成项目默认将该文件排除在 Git 之外。custom env 经 stdin 传给原生 CLI；同步计划、日志和状态基线不得保存其明文。Multica Server 认证仍由 `multica setup` 创建的 profile 管理。
 
 ## 14. 一致性与失败语义
 

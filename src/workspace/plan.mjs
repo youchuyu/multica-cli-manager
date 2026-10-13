@@ -1,12 +1,14 @@
 import {
   AGENT_FIELDS,
   PROJECT_FIELDS,
+  SQUAD_FIELDS,
   SKILL_FIELDS,
   WORKSPACE_FIELDS,
   changedFields,
   normalizeText,
   normalizedProjectResource,
   pick,
+  secretFingerprint,
 } from "./format.mjs";
 
 const fieldsFor = (type) =>
@@ -15,6 +17,7 @@ const fieldsFor = (type) =>
     agent: AGENT_FIELDS,
     skill: SKILL_FIELDS,
     project: PROJECT_FIELDS,
+    squad: SQUAD_FIELDS,
   })[type];
 
 const fileHash = (content) => normalizeText(content);
@@ -34,7 +37,12 @@ export function normalized(snapshot) {
   for (const [type, values] of Object.entries(snapshot.items))
     for (const value of values) {
       const data = pick(value, fieldsFor(type));
-      if (type === "agent") data.instructions = fileHash(value.instructions);
+      if (type === "agent") {
+        data.instructions = fileHash(value.instructions);
+        data.custom_env = secretFingerprint(value.custom_env || {});
+        data.skill_ids = [...(value.skill_ids || [])].sort();
+        data.mcp_config = secretFingerprint(value.mcp_config);
+      }
       if (type === "skill") {
         const files = Array.isArray(value.files)
           ? skillFileMap(value.files)
@@ -48,6 +56,10 @@ export function normalized(snapshot) {
         );
       }
       if (type === "project") data.resources = (value.resources || []).map(normalizedProjectResource).map(({ id, ...resource }) => resource);
+      if (type === "squad") {
+        data.instructions = fileHash(value.instructions);
+        data.members = [...(value.members || [])].map(({ member_type, member_id, role }) => ({ member_type, member_id, role })).sort((a, b) => `${a.member_type}:${a.member_id}`.localeCompare(`${b.member_type}:${b.member_id}`));
+      }
       out[keyOf(type, value)] = data;
     }
   return out;
@@ -71,18 +83,20 @@ export function plan(direction, source, target, base, hard) {
         name: value.name || value.title || value.id,
       });
     else if (JSON.stringify(value) !== JSON.stringify(current)) {
-      const sourceChanged =
-          !previous || JSON.stringify(value) !== JSON.stringify(previous),
-        targetChanged =
-          !previous || JSON.stringify(current) !== JSON.stringify(previous);
-      if (!hard && targetChanged && (sourceChanged || !baseNorm))
+      const fields = changedFields(value, current, Object.keys(value)).filter(
+        (x) => x !== "id" && x !== "files" && x !== "resources",
+      );
+      const conflictingFields = fields.filter((field) => {
+        if (!previous) return true;
+        const baseline = Object.hasOwn(previous, field) ? previous[field] : current[field];
+        return JSON.stringify(value[field] ?? null) !== JSON.stringify(baseline ?? null)
+          && JSON.stringify(current[field] ?? null) !== JSON.stringify(baseline ?? null);
+      });
+      if (!hard && conflictingFields.length)
         blocked.push(
-          `${type} ${id} differs from target; use --hard after review`,
+          `${type} ${id} differs from target in ${conflictingFields.join(", ")}; use --hard after review`,
         );
       else {
-        const fields = changedFields(value, current, Object.keys(value)).filter(
-          (x) => x !== "id" && x !== "files" && x !== "resources",
-        );
         if (fields.length)
           operations.push({
             action: "update",
@@ -155,7 +169,9 @@ export function plan(direction, source, target, base, hard) {
     const targetSkill = target?.items.skill.find((x) => x.id === skill.id);
     if (!targetSkill) continue;
     const sourceFiles =
-      direction === "push" ? skill.files : skillFileMap(skill.files);
+      direction === "push"
+        ? Object.fromEntries(Object.entries(skill.files || {}).map(([path, content]) => [path, fileHash(content)]))
+        : skillFileMap(skill.files);
     const targetFiles =
       direction === "push"
         ? skillFileMap(targetSkill.files)
@@ -197,6 +213,29 @@ export function plan(direction, source, target, base, hard) {
           );
         }
       }
+  }
+  for (const squad of source.items.squad || []) {
+    const targetSquad = target?.items.squad?.find((x) => x.id === squad.id);
+    const sourceMembers = (squad.members || []).map(({ member_type, member_id, role }) => ({ member_type, member_id, role }));
+    if (!targetSquad) {
+      for (const member of sourceMembers) {
+        const isLeader = member.member_type === "agent" && member.member_id === squad.leader_id;
+        operations.push({ action: isLeader ? "set-role" : "add", resource_type: "squad_member", squad_id: squad.id, member, name: `${squad.name}/${member.role}` });
+      }
+      continue;
+    }
+    const targetMembers = (targetSquad.members || []).map(({ member_type, member_id, role }) => ({ member_type, member_id, role }));
+    const targetByKey = new Map(targetMembers.map((m) => [`${m.member_type}:${m.member_id}`, m]));
+    const sourceKeys = new Set(sourceMembers.map((m) => `${m.member_type}:${m.member_id}`));
+    for (const member of sourceMembers) {
+      const key = `${member.member_type}:${member.member_id}`;
+      if (!targetByKey.has(key)) operations.push({ action: "add", resource_type: "squad_member", squad_id: squad.id, member, name: `${squad.name}/${member.role}` });
+      else if (member.role !== targetByKey.get(key).role) operations.push({ action: "set-role", resource_type: "squad_member", squad_id: squad.id, member, name: `${squad.name}/${member.role}` });
+    }
+    for (const member of targetMembers) if (!sourceKeys.has(`${member.member_type}:${member.member_id}`)) {
+      if (hard) operations.push({ action: "remove", resource_type: "squad_member", squad_id: squad.id, member, name: `${squad.name}/${member.role}` });
+      else blocked.push(`squad member ${squad.id}/${member.member_id} exists only on target; use --hard to clean it`);
+    }
   }
   return {
     workspace_id: source.workspace.id,

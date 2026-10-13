@@ -3,3 +3,4 @@ node_modules/
 .DS_Store
 .multica/states/
 .multica/trash/
+src/workspaces/*/agents/*/custom-env.json

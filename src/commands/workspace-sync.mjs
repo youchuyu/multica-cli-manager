@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { join } from "node:path";
 import { formattedJson } from "../workspace/format.mjs";
 import { localSnapshot, normalizeLocalSlugs, writeLocal } from "../workspace/local.mjs";
@@ -73,7 +74,7 @@ export async function syncWorkspace(options) {
   const expected = action === "pull" ? normalized(verifyRemote) : normalized(local);
   const actual = action === "pull" ? normalized(verifyLocal) : normalized(verifyRemote);
   for (const [key, value] of Object.entries(expected))
-    if (JSON.stringify(value) !== JSON.stringify(actual[key]))
+    if (!isDeepStrictEqual(value, actual[key]))
       throw new Error(`post-apply verification failed for ${key}`);
   if (hard && Object.keys(actual).some((key) => !expected[key]))
     throw new Error("post-apply verification found target-only resources");

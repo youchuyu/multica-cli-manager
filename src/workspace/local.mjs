@@ -66,14 +66,24 @@ export async function localSnapshot(root, identifier, { required = true } = {}) 
   const workspacePath = join(found.dir, "workspace.json");
   validateFields(found.workspace, WORKSPACE_FIELDS, workspacePath);
   idOf(found.workspace, workspacePath);
-  const items = { workspace: [found.workspace], agent: [], skill: [], project: [] };
+  const items = { workspace: [found.workspace], agent: [], skill: [], project: [], squad: [] };
   for (const [type, marker] of [["agent", "agent.json"], ["skill", "skill.json"], ["project", "project.json"]])
     for (const dir of await dirs(join(found.dir, `${type}s`), marker)) {
       const path = join(dir, marker);
       const value = await readJson(path);
       validateFields(value, fieldsFor(type), path);
       idOf(value, path);
-      if (type === "agent") value.instructions = await readFile(join(dir, "instructions.md"), "utf8");
+      if (type === "agent") {
+        value.instructions = await readFile(join(dir, "instructions.md"), "utf8");
+        const customEnvPath = join(dir, "custom-env.json");
+        value.custom_env = await readJson(customEnvPath);
+        if (!value.custom_env || Array.isArray(value.custom_env) || typeof value.custom_env !== "object")
+          throw new Error(`${customEnvPath} must be a JSON object`);
+        for (const [key, envValue] of Object.entries(value.custom_env)) {
+          if (!key) throw new Error(`${customEnvPath} contains an empty environment variable name`);
+          if (typeof envValue !== "string") throw new Error(`${customEnvPath} value for ${key} must be a string`);
+        }
+      }
       if (type === "skill") {
         value.content = await readFile(join(dir, "SKILL.md"), "utf8");
         value.files = {};
@@ -106,6 +116,28 @@ export async function localSnapshot(root, identifier, { required = true } = {}) 
       Object.defineProperty(value, "localDir", { value: dir });
       items[type].push(value);
     }
+  for (const dir of await dirs(join(found.dir, "squads"), "squad.json")) {
+    const path = join(dir, "squad.json");
+    const value = await readJson(path);
+    validateFields(value, fieldsFor("squad"), path);
+    idOf(value, path);
+    value.instructions = await readFile(join(dir, "instructions.md"), "utf8");
+    value.members = await readJson(join(dir, "members.json"));
+    if (!Array.isArray(value.members)) throw new Error(`${join(dir, "members.json")} must be a JSON array`);
+    const seenMembers = new Set();
+    for (const member of value.members) {
+      if (!member || typeof member !== "object" || Array.isArray(member)) throw new Error(`${join(dir, "members.json")} members must be objects`);
+      for (const key of Object.keys(member)) if (!["member_type", "member_id", "role"].includes(key)) throw new Error(`${join(dir, "members.json")} contains unsupported field: ${key}`);
+      if (!member.member_type || !["agent", "member"].includes(member.member_type)) throw new Error(`${join(dir, "members.json")} member_type must be agent or member`);
+      if (!member.member_id || typeof member.member_id !== "string") throw new Error(`${join(dir, "members.json")} member_id must be a string`);
+      if (typeof member.role !== "string") throw new Error(`${join(dir, "members.json")} role must be a string`);
+      const key = `${member.member_type}:${member.member_id}`;
+      if (seenMembers.has(key)) throw new Error(`duplicate Squad member: ${key}`);
+      seenMembers.add(key);
+    }
+    Object.defineProperty(value, "localDir", { value: dir });
+    items.squad.push(value);
+  }
   for (const [type, values] of Object.entries(items)) {
     const seen = new Set();
     for (const value of values) {
@@ -119,7 +151,7 @@ export async function localSnapshot(root, identifier, { required = true } = {}) 
 
 export async function normalizeLocalSlugs(local) {
   const renames = [];
-  for (const type of ["agent", "skill", "project"])
+  for (const type of ["agent", "skill", "project", "squad"])
     for (const item of local.items[type]) {
       const expectedSlug = slugify(item.name || item.title);
       if (!expectedSlug) throw new Error(`${type} ${item.id} name must produce a non-empty slug`);
@@ -151,7 +183,10 @@ export async function writeLocal(root, remote, hard, local) {
       const itemDir = join(dir, `${type}s`, slugify(item.name || item.title));
       await write(join(itemDir, marker), formattedJson(pick(item, fieldsFor(type))));
       if (type === "project") await write(join(itemDir, "resources.json"), formattedJson((item.resources || []).map(normalizedProjectResource)));
-      if (type === "agent") await write(join(itemDir, "instructions.md"), String(item.instructions ?? ""));
+      if (type === "agent") {
+        await write(join(itemDir, "instructions.md"), String(item.instructions ?? ""));
+        await write(join(itemDir, "custom-env.json"), formattedJson(item.custom_env || {}));
+      }
       if (type === "skill") {
         await write(join(itemDir, "SKILL.md"), String(item.content ?? ""));
         for (const file of item.files || []) {
@@ -169,8 +204,14 @@ export async function writeLocal(root, remote, hard, local) {
         }
       }
     }
+  for (const item of remote.items.squad) {
+    const itemDir = join(dir, "squads", slugify(item.name));
+    await write(join(itemDir, "squad.json"), formattedJson(pick(item, fieldsFor("squad"))));
+    await write(join(itemDir, "instructions.md"), String(item.instructions ?? ""));
+    await write(join(itemDir, "members.json"), formattedJson((item.members || []).map(({ member_type, member_id, role }) => ({ member_type, member_id, role }))));
+  }
   if (hard && local)
-    for (const [type, marker] of [["agent", "agent.json"], ["skill", "skill.json"], ["project", "project.json"]])
+    for (const [type, marker] of [["agent", "agent.json"], ["skill", "skill.json"], ["project", "project.json"], ["squad", "squad.json"]])
       for (const itemDir of await dirs(join(dir, `${type}s`), marker)) {
         const value = await readJson(join(itemDir, marker));
         if (!remote.items[type].some((x) => x.id === value.id)) await trash(root, dir, itemDir);
